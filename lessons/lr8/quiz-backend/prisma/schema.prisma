@@ -1,27 +1,13 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
-//generator client {
-//  provider = "prisma-client"
- // output   = "../src/generated/prisma"
-//}
-
-//datasource db {
-//  provider = "postgresql"
-//}
-
-//------------------------------------------------------
+// чертёж базы, создание таблицы
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client-js" // стандартный клиент Prisma для Node.js + TS
 }
-
+// подключение к базе данных
 datasource db {
   provider = "sqlite"         
  
 }
-
+// Таблица пользователей (модель User)
 model User {
   id        String   @id @default(cuid())     
   email     String   @unique
