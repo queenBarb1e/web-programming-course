@@ -73,6 +73,7 @@ auth.post('/github/callback', async (c) => {
           githubId: mockUserData.githubId,
           name: mockUserData.name,
           email: mockUserData.email,
+          role: 'student',  // обязательно для новой схемы
         },
       })
     } catch (err) {

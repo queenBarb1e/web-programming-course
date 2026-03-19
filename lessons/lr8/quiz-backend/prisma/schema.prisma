@@ -1,19 +1,85 @@
-// чертёж базы, создание таблицы
-generator client {
-  provider = "prisma-client-js" // стандартный клиент Prisma для Node.js + TS
-}
-// подключение к базе данных
-datasource db {
-  provider = "sqlite"         
- 
-}
-// Таблица пользователей (модель User)
-model User {
-  id        String   @id @default(cuid())     
-  email     String   @unique
-  name      String?
-  githubId  String   @unique                 
-  createdAt DateTime @default(now())
+// prisma/schema.prisma
 
-  @@map("users")   // название таблицы  
+// Это говорит Prisma: создай мне код на TypeScript для работы с базой
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Тип базы — простая файловая SQLite (файл dev.db на диске)
+datasource db {
+  provider = "sqlite"
+}
+
+// Пользователь (была в LR8, теперь добавляем роль и связь с сессиями)
+model User {
+  id        String    @id @default(cuid())  // уникальный ID, Prisma сама придумывает
+  email     String    @unique              // email уникальный — нельзя двух с одинаковым
+  name      String?                         // имя может быть пустым
+  githubId  String    @unique              // ID из GitHub — тоже уникальный
+  role      String    @default("student")  // "student" или "admin" — для админки
+  sessions  Session[]                       // один пользователь может иметь много сессий
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+// Категория вопросов (например "Математика", "История")
+model Category {
+  id        String     @id @default(cuid())
+  name      String     // полное название категории
+  slug      String     @unique // короткое имя для URL (math, history)
+  questions Question[] // в одной категории много вопросов
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+// Вопрос в квизе
+model Question {
+  id             String   @id @default(cuid())
+  text           String   // текст вопроса ("Сколько будет 2+2?")
+  type           String   // "single-select", "multiple-select", "essay"
+  categoryId     String
+  category       Category @relation(fields: [categoryId], references: [id]) // связь с категорией
+  correctAnswer  Json?    // правильные ответы (для автопроверки)
+  points         Int      @default(1) // сколько баллов за вопрос
+  answers        Answer[] // все ответы студентов на этот вопрос
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Сессия — одно прохождение квиза студентом
+model Session {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  status      String    @default("in_progress")
+  score       Float?
+  startedAt   DateTime  @default(now())
+  expiresAt   DateTime
+  completedAt DateTime?
+  answers     Answer[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // ─── Индексы из задания ───
+  @@index([userId])           // быстро искать сессии конкретного пользователя
+  @@index([status])           // быстро фильтровать по статусу (in_progress, completed...)
+  @@index([userId, status])   // комбинированный — быстро искать сессии пользователя по статусу
+}
+
+// Ответ студента на вопрос в сессии
+model Answer {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id])
+  userAnswer Json
+  score      Float?
+  isCorrect  Boolean?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sessionId, questionId])
+  @@index([sessionId])        // быстро находить все ответы в одной сессии
+  @@index([questionId])       // быстро находить все ответы на один вопрос
 }
