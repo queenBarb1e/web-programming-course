@@ -56,9 +56,9 @@ auth.post('/github/callback', async (c) => {
   if (code.startsWith('test_')) {
     // Фейковые данные пользователя, как будто пришли от GitHub
     const mockUserData = {
-      githubId: '1111111',
-      name: 'Сладкова Екатерина',
-      email: 'sladkovakate@mail.ru',
+      githubId: '0000001',
+      name: 'Новый пользователь',
+      email: 'NewUser@mail.ru',
     }
     // Сохраняем или обновляем пользователя в базе (upsert — умная команда)
     let user
