@@ -133,6 +133,7 @@ export class SessionService {
 export const sessionService = new SessionService()
 
 // ────────────────────────────────────────────────
+/*
 // Временный тест метода createSession
 if (import.meta.main) {
   console.log("\n=== Тест createSession ===")
@@ -146,3 +147,35 @@ if (import.meta.main) {
     console.log("Ошибка:", error.message)
   }
 }
+
+console.log("\n=== Создаём тестовую категорию ===")
+*/
+/*
+try {
+  const category = await prisma.category.create({
+    data: {
+      name: 'Математика тест',
+      slug: 'math-test-002', // уникальный slug
+    },
+  })
+  console.log("Создана категория:", category)
+} catch (error: any) {
+  console.log("Ошибка:", error.message)
+}
+console.log("\n=== Создаём тестовый вопрос ===")
+
+try {
+  const question = await prisma.question.create({
+    data: {
+      text: '2 + 2 = ?',
+      type: 'multiple-select',
+      categoryId: 'cmmxp9eny0001qgunfv5icvup',
+      correctAnswer: [0, 2], // JSON-массив
+      points: 2,
+    },
+  })
+  console.log("Создан вопрос:", question)
+} catch (error: any) {
+  console.log("Ошибка:", error.message)
+}
+  */
