@@ -4,21 +4,22 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "test:run": "vitest run",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.11",
-    "@prisma/adapter-better-sqlite3": "^7.5.0",
-    "@prisma/client": "^7.5.0",
-    "better-sqlite3": "^12.8.0",
-    "dotenv": "^17.3.1",
-    "hono": "^4.12.8",
+    "@hono/node-server": "^1.19.9",
+    "@hono/zod-validator": "^0.7.6",
+    "@prisma/client": "^5.22.0",
+    "hono": "^4.11.9",
+    "prisma": "^5.22.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
-    "prisma": "^7.5.0",
+    "@vitest/ui": "^4.0.18",
     "tsx": "^4.7.1",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.18"
   }
 }

@@ -1,22 +1,23 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import authRoutes from './routes/auth.js'
-import 'dotenv/config'
+import { logger } from 'hono/logger'
+import { cors } from 'hono/cors'
+import admin from './routes/admin.js'
+import sessions from './routes/session.js'
+import auth from './routes/auth.js'
 
-const app = new Hono<{
-  Bindings: { JWT_SECRET: string }
-}>().use(async (c, next) => {
-  c.env.JWT_SECRET = process.env.JWT_SECRET || ''
-  await next()
-})
+const app = new Hono()
 
-// Checkpoint 1
+app.use('*', logger())
+//app.use('*', cors())
+
 app.get('/health', (c) => c.json({ status: 'ok' }))
 
- 
-// Checkpoint 3
-app.route('/api/auth', authRoutes)
+app.route('/api/auth', auth)
+app.route('/api/sessions', sessions)
+app.route('/api/admin', admin)
 
+app.get('/', (c) => c.text('Quiz API Server'))
 
 serve({
   fetch: app.fetch,

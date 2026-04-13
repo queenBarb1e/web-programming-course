@@ -1,181 +1,188 @@
 // src/services/sessionService.ts
+// сервис для управления сессиями тестирований, он отвечает за сохранение ответов, подсчет баллов, заверш сес, получ данных сес.
+import { PrismaClient } from '@prisma/client'
+import { scoringService } from './scoringService.js'
 
-import { prisma } from '../db/client.js'        // общий клиент Prisma
-import { scoringService } from './scoringService.js'  // калькулятор баллов из Checkpoint 1
+const prisma = new PrismaClient()
 
-/**
- * Сервис для управления сессиями квиза.
- * Здесь вся логика создания сессий, ответов и завершения.
- * Роуты только вызывают методы сервиса — вся умная работа здесь.
- */
+export interface SubmitAnswerInput {
+  sessionId: string // ID сессии (какой тест проходит студент)
+  questionId: string // ID вопроса
+  userAnswer: any // Ответ студента (любой формат: строка, массив, число)
+}
+
+// // Ответ студента (любой формат: строка, массив, число)
 export class SessionService {
-  constructor() {
-    // Prisma уже глобальный из db/client, не нужно передавать
+  //сохранение ответа студента
+  // Проверяет можно ли отвечать - считает баллы - сохраняет ответ.
+  async submitAnswer(data: SubmitAnswerInput) {
+    return await prisma.$transaction(async (tx) => {
+      // Ищем сессию по ID, сразу подтягиваем данные пользователя
+      const session = await tx.session.findUnique({
+        where: { id: data.sessionId },
+        include: { user: true } // include = подтянуть связанные данные
+      })
+
+      if (!session) {
+        throw new Error('Сессия не найдена') // нет такой сессии - ошибка
+      }
+      // Проверяем статус: можно отвечать только в "in_progress"
+      if (session.status !== 'in_progress') {
+        throw new Error('Сессия уже завершена или истекла')
+      }
+      // ШАГ 1 Проверяем, не истёк ли срок (1 час с момента создания), Нельзя отвечать в завершённой или просроченной сессии.
+      if (session.expiresAt < new Date()) {
+        // Автоматически меняем статус на "expired"
+        await tx.session.update({
+          where: { id: data.sessionId },
+          data: { status: 'expired' }
+        })
+        throw new Error('Время сессии истекло')
+      }
+
+      // ШАГ 2 проверяем вопрос
+      const question = await tx.question.findUnique({
+        where: { id: data.questionId }
+      })
+
+      if (!question) {
+        throw new Error('Вопрос не найден')
+      }
+
+      // ШАГ 3 Проверяем, не отвечали ли уже
+      // Один вопрос — один ответ. Без этой проверки студент мог бы спамить ответы
+      // Ищем по составному уникальному ключу [sessionId + questionId]
+      const existingAnswer = await tx.answer.findUnique({
+        where: {
+          sessionId_questionId: { // @@unique в схеме Prisma
+            sessionId: data.sessionId,
+            questionId: data.questionId
+          }
+        }
+      })
+
+      if (existingAnswer) {
+        throw new Error('Ответ на этот вопрос уже был отправлен')
+      }
+
+      // ШАГ 4 Вычисляем баллы (для автоматически проверяемых типов)
+      let score: number | null = null // null = ещё не проверено (для essay)
+      let isCorrect: boolean | null = null
+      // Только multiple-select можно проверить автоматически
+      if (question.type === 'multiple-select') {
+        score = scoringService.scoreQuestion(
+          'multiple-select',
+          question.correctAnswer ? JSON.parse(question.correctAnswer) : [],
+          data.userAnswer
+        )
+        isCorrect = score > 0 // если балл > 0 → правильно
+      }
+      // Для essay score остается null до проверки админом
+
+      // 5. Сохраняем ответ
+      const answer = await tx.answer.create({
+        data: {
+          sessionId: data.sessionId,
+          questionId: data.questionId,
+          userAnswer: JSON.stringify(data.userAnswer), //превращаем ответ в строку для БД
+          score, // число или null
+          isCorrect // true/false/null
+        }
+      })
+
+      return answer // возвращаем созданный ответ
+    })
   }
 
-  /**
-   * Создать новую сессию (студент начинает квиз).
-   * @param userId ID пользователя из таблицы User
-   * @returns созданная сессия с id, статусом и временем окончания
-   */
-  async createSession(userId: string) {
-    // 1. Проверяем, что пользователь существует
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    })
-
-    if (!user) {
-      throw new Error('Пользователь не найден')
-    }
-
-    // 2. Сессия длится 1 час (60 минут = 3600 секунд = 3600000 мс)
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
-
-    // 3. Создаём сессию в базе
-    const session = await prisma.session.create({
-      data: {
-        userId,                    // кто начал квиз
-        status: 'in_progress',     // началась, ещё не завершена
-        expiresAt,                 // когда истечёт время
-        score: null,               // баллы пока неизвестны
-      },
-    })
-
-    return session // возвращаем созданную сессию
-  }
-
-  /**
-   * Студент отвечает на вопрос в сессии.
-   * Если вопрос автопроверяемый — сразу считаем баллы через scoringService.
-   * @param sessionId ID сессии
-   * @param questionId ID вопроса
-   * @param userAnswer ответ студента (строка для essay или массив номеров для выбора)
-   * @returns созданный ответ с баллами (если посчитали)
-   */
-  async submitAnswer(
-    sessionId: string,
-    questionId: string,
-    userAnswer: any // Json — строка или массив
-  ) {
-    // 1. Находим сессию и проверяем статус
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: { answers: true }, // чтобы проверить, отвечал ли уже
-    })
-
-    if (!session) {
-      throw new Error('Сессия не найдена')
-    }
-
-    if (session.status !== 'in_progress') {
-      throw new Error('Сессия уже завершена или истекла')
-    }
-
-    // 2. Находим вопрос
-    const question = await prisma.question.findUnique({
-      where: { id: questionId },
-    })
-
-    if (!question) {
-      throw new Error('Вопрос не найден')
-    }
-
-    // 3. Проверяем, не отвечал ли уже на этот вопрос в этой сессии
-    const existingAnswer = session.answers.find(a => a.questionId === questionId)
-    if (existingAnswer) {
-      throw new Error('На этот вопрос уже был дан ответ в сессии')
-    }
-
-    let score: number | null = null
-    let isCorrect: boolean | null = null
-
-    // 4. Автопроверка для multiple-select / single-select
-    if (question.type !== 'essay') {
-      // correctAnswer хранится как Json — преобразуем в массив чисел
-      const correctAnswers = (question.correctAnswer as number[]) || []
-
-      // userAnswer тоже приводим к массиву (если single-select — будет [число])
-      const studentAnswers = Array.isArray(userAnswer) ? userAnswer : [userAnswer]
-
-      score = scoringService.scoreMultipleSelect(correctAnswers, studentAnswers)
-
-      // isCorrect — полностью верно, если набрал максимум баллов
-      isCorrect = score === question.points
-    }
-
-    // 5. Создаём ответ в базе
-    const answer = await prisma.answer.create({
-      data: {
-        sessionId,
-        questionId,
-        userAnswer: JSON.stringify(userAnswer), // сохраняем как JSON-строку
-        score,
-        isCorrect,
-      },
-    })
-
-    return answer
-  }
-
-  /**
-   * Завершить сессию — посчитать итоговый балл и обновить статус.
-   * Используем транзакцию, чтобы всё было атомарно.
-   * @param sessionId ID сессии
-   * @returns обновлённая сессия
-   */
+  // Завершение сессии
+  // студент нажал завешить тест - считаем итоговый балл - меняем статус
   async submitSession(sessionId: string) {
-    // Пока заглушка — реализуем позже
-    return null
+    return await prisma.$transaction(async (tx) => {
+      const session = await tx.session.findUnique({
+        where: { id: sessionId },
+        include: { 
+          answers: {
+            include: { question: true } // подтягиваем вопросы для каждого ответа
+          } 
+        }
+      })
+
+      if (!session) {
+        throw new Error('Сессия не найдена')
+      }
+
+      if (session.status !== 'in_progress') {
+        throw new Error('Сессия уже завершена или истекла')
+      }
+
+      // Вычисляем общий балл (только по автоматически проверенным ответам)
+      const totalScore = session.answers.reduce((sum, answer) => { // reduce = "свернуть" массив в одно число
+        return sum + (answer.score || 0) // если score null → считаем как 0
+      }, 0) // 0 = начальное значение sum
+
+      // Обновляем сессию
+      const updatedSession = await tx.session.update({
+        where: { id: sessionId },
+        data: {
+          status: 'completed', // статус "завершено"
+          score: totalScore, // итоговый балл
+          completedAt: new Date() // время завершения
+        }
+      })
+
+      return updatedSession
+    })
   }
+
+  // получение данных сессии, загружает сессию со всеми ответами, но только для владельца
+  async getSessionWithAnswers(sessionId: string, userId: string) {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    // Используем select вместо include для контроля полей
+    select: { // выбираем ТОЛЬКО нужные поля, не всё подряд
+      id: true,
+      status: true,
+      score: true,
+      startedAt: true,
+      expiresAt: true,
+      completedAt: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true // только нужные поля пользователя
+        }
+      },
+      answers: {
+        select: {
+          id: true,
+          userAnswer: true,
+          score: true,
+          isCorrect: true,
+          createdAt: true,
+          question: {
+            select: {
+              id: true,
+              text: true,
+              type: true,
+              points: true,
+              category: {
+                select: {
+                  name: true // только имя категории
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+  // Проверяем: это сессия запрашивающего пользователя?
+  if (!session) throw new Error('Сессия не найдена')
+  if (session.user.id !== userId) throw new Error('Нет доступа к этой сессии')
+  // чужую сессию не видим
+  return session
+}
 }
 
-// Один экземпляр сервиса — импортируем и используем в роутах
 export const sessionService = new SessionService()
-
-// ────────────────────────────────────────────────
-/*
-// Временный тест метода createSession
-if (import.meta.main) {
-  console.log("\n=== Тест createSession ===")
-
-  const testUserId = 'cmmxm4fd90000wkuneibclwr8' // твой реальный ID
-
-  try {
-    const session = await sessionService.createSession(testUserId)
-    console.log("Создана сессия:", session)
-  } catch (error: any) {
-    console.log("Ошибка:", error.message)
-  }
-}
-
-console.log("\n=== Создаём тестовую категорию ===")
-*/
-/*
-try {
-  const category = await prisma.category.create({
-    data: {
-      name: 'Математика тест',
-      slug: 'math-test-002', // уникальный slug
-    },
-  })
-  console.log("Создана категория:", category)
-} catch (error: any) {
-  console.log("Ошибка:", error.message)
-}
-console.log("\n=== Создаём тестовый вопрос ===")
-
-try {
-  const question = await prisma.question.create({
-    data: {
-      text: '2 + 2 = ?',
-      type: 'multiple-select',
-      categoryId: 'cmmxp9eny0001qgunfv5icvup',
-      correctAnswer: [0, 2], // JSON-массив
-      points: 2,
-    },
-  })
-  console.log("Создан вопрос:", question)
-} catch (error: any) {
-  console.log("Ошибка:", error.message)
-}
-  */

@@ -1,113 +1,119 @@
-// src/services/scoringService.ts
-import { prisma } from '../db/client.js'
-// Расширение типов для import.meta.main в ESM
-declare global {
-  interface ImportMeta {
-    main: boolean
-  }
-}
-/**
- * Сервис для подсчёта баллов за ответы в квизе.
- * Это бизнес-логика — сюда выносим все правила подсчёта баллов.
- * Не смешиваем с HTTP-роутами и базой — только чистые вычисления.
- */
-export class ScoringService {
-  /**
-   * Подсчёт баллов за вопрос с множественным выбором.
-   * Правила из задания: +1 за каждый правильный ответ,
-   * -0.5 за каждый неправильный, итог не меньше 0.
-   *
-   * Пример:
-   * correctAnswers = [0, 2]  (правильные варианты A и C)
-   * studentAnswers = [0, 1, 2] → +1 (0) +1 (2) -0.5 (1) = 1.5
-   */
-  scoreMultipleSelect(correctAnswers: number[], studentAnswers: number[]): number {
-    const correctSet = new Set(correctAnswers); // быстрый поиск правильных
-    let score = 0;
+type EssayRubric = {
+  maxPoints: number; // Максимум баллов за весь essay (например, 10)
+  criteria: {   // Критерии оценивания
+    name: string;  // Название критерия (например, "Грамотность")
+    maxPoints: number;  // Максимум за этот критерий (например, 3)
+  }[];
+};
 
-    for (const answer of studentAnswers) {
-      if (correctSet.has(answer)) {
-        score += 1;  // правильный → +1
-      } else {
-        score -= 0.5;  // неправильный → -0.5
-      }
+// МЕТОД 1: multiple-select (множественный выбор)
+// Класс с методами подсчёта баллов
+export class ScoringService {
+  // 1. MULTIPLE-SELECT: +1 за правильный, -0.5 за неправильный, минимум 0
+  scoreMultipleSelect(correctAnswers: string[], studentAnswers: string[]): number {
+    // Если нет правильных ответов или студент ничего не выбрал — 0 баллов
+    if (!correctAnswers.length || !studentAnswers.length) {
+      return 0;
     }
 
-    return Math.max(0, score);  // нельзя меньше 0
+    let score = 0;
+    
+    // Создаем множества для быстрого поиска
+    // correctAnswers = ["A", "C", "D"] - correctSet = {"A", "C", "D"}
+    const correctSet = new Set(correctAnswers);
+    // studentAnswers = ["A", "B"] - studentSet = {"A", "B"}
+    const studentSet = new Set(studentAnswers);
+    
+    // Начисляем за все правильные ответы
+    // Проходим по всем ПРАВИЛЬНЫМ ответам
+    for (const answer of correctSet) {
+      // Если студент выбрал этот вариант — +1
+      if (studentSet.has(answer)) {
+        score += 1; // "A" есть в обоих - +1
+      }
+    }
+    
+    // Отнимаем за лишние (неправильные) варианты
+    // Проходим по всем ответам СТУДЕНТА
+    for (const answer of studentSet) {
+      // Если это НЕ правильный ответ — штраф −0.5
+      if (!correctSet.has(answer)) {
+        score -= 0.5; // "B" нет в правильных - −0.5
+      }
+    }
+    // После этого цикла: score = 1 − 0.5 = 0.5
+    // Не даём уйти в минус (если студент выбрал только неправильные)
+    return Math.max(0, score);
   }
 
-  /**
-   * Подсчёт баллов за эссе (открытый ответ).
-   * Пока простая версия: среднее арифметическое оценок проверяющих,
-   * но не больше максимума из рубрики.
-   *
-   * Пример:
-   * grades = [8, 9, 7] → среднее 8
-   * rubric = { maxPoints: 10 } → результат 8
-   */
-  scoreEssay(grades: number[], rubric: { maxPoints: number }): number {
-    if (grades.length === 0) return 0;
+  // Подсчет баллов для essay вопросов, посчитать баллы за развернутый ответ, который оценивает админ по кртиреиям
+  scoreEssay(grades: number[], rubric: EssayRubric): number {
+    // grades = [3, 2, 3] — оценки админа по каждому критерию
+    // rubric.criteria.length = 3 — количество критериев
 
-    const sum = grades.reduce((acc, g) => acc + g, 0);
-    const average = sum / grades.length;
+    // Проверка: количество оценок = количеству критериев
+    if (grades.length !== rubric.criteria.length) {
+      throw new Error('Количество оценок должно соответствовать количеству критериев');
+    }
 
-    return Math.min(average, rubric.maxPoints); // не больше максимума
+    let totalScore = 0;
+    
+    // Проходим по всем критериям
+    for (let i = 0; i < grades.length; i++) {
+      const grade = grades[i]; // оценка за этот критерий (например, 3)
+      const maxForCriterion = rubric.criteria[i].maxPoints; // максимум (например, 4)
+   
+      // Валидация: оценка не больше максимума
+      if (grade > maxForCriterion) {
+        throw new Error(`Оценка по критерию "${rubric.criteria[i].name}" не может превышать ${maxForCriterion}`);
+      }
+      
+      // Валидация: оценка не отрицательная
+      if (grade < 0) {
+        throw new Error('Оценка не может быть отрицательной');
+      }
+      // Прибавляем к общей сумме
+      totalScore += grade;
+    }
+    
+    // Не даём превысить максимум всего essay
+    return Math.min(totalScore, rubric.maxPoints);
+  }
+  // идет проверка, что админ выставил столько же оценок сколько и критериев
+  // каждая оценка не больше максимума своего критерия
+  // оценки не отриц
+  // итог не превыш общий максимум
+
+  // универсальный диспетчер - вызывать один метод,  который вызывает нужный подсчет в зависимости от типа вопроса
+  scoreQuestion(
+    questionType: string,
+    correctAnswer: any, // правильный ответ из БД
+    studentAnswer: any, // ответ студента
+    rubric?: EssayRubric // рубрика (только для essay)
+  ): number {
+    switch (questionType) {
+      case 'multiple-select':
+        // Для множественного выбора — вызываем метод выше
+        return this.scoreMultipleSelect(correctAnswer, studentAnswer);
+      
+      case 'single-select':
+        // Для одиночного выбора: просто сравниваем строки
+        // "A" === "A" → 1 балл, "A" === "B" → 0 баллов
+        return correctAnswer === studentAnswer ? 1 : 0;
+      
+      case 'essay':
+        // Для essay нужна рубрика, иначе ошибка
+        if (!rubric) {
+          throw new Error('Для essay вопросов необходима рубрика оценивания');
+        }
+        // studentAnswer здесь — это grades (массив оценок)
+        return this.scoreEssay(studentAnswer, rubric);
+      
+      default:
+        // Неизвестный тип — ошибка
+        throw new Error(`Неподдерживаемый тип вопроса: ${questionType}`);
+    }
   }
 }
 
-// Один экземпляр сервиса — его будем импортировать и использовать везде
 export const scoringService = new ScoringService();
-
-// ────────────────────────────────────────────────
-// Временные тесты (запускаются, если запустить файл напрямую)
-// После проверки можно удалить
-if (import.meta.main) {
-  console.log("=== Тесты scoreMultipleSelect ===");
-
-  console.log(
-    "Тест 1: правильные [0,2], студент [0,1,2] →",
-    scoringService.scoreMultipleSelect([0, 2], [0, 1, 2])
-  ); // должно быть 1.5
-
-  console.log(
-    "Тест 2: правильные [1], студент [0] →",
-    scoringService.scoreMultipleSelect([1], [0])
-  ); // должно быть 0
-
-  console.log(
-    "Тест 3: правильные [0,1,2], студент [0,1,2] →",
-    scoringService.scoreMultipleSelect([0, 1, 2], [0, 1, 2])
-  ); // должно быть 3
-
-  console.log(
-    "Тест 4: правильные [], студент [1] →",
-    scoringService.scoreMultipleSelect([], [1])
-  ); // должно быть 0
-
-  console.log(
-    "Тест 5: правильные [0], студент [] →",
-    scoringService.scoreMultipleSelect([0], [])
-  ); // должно быть 0
-
-  console.log("\n=== Тесты scoreEssay (пока простая версия) ===");
-
-  console.log(
-    "Тест 1: оценки [8,9,7], max 10 →",
-    scoringService.scoreEssay([8, 9, 7], { maxPoints: 10 })
-  ); // должно быть 8
-
-  console.log(
-    "Тест 2: оценки [5,10,0], max 10 →",
-    scoringService.scoreEssay([5, 10, 0], { maxPoints: 10 })
-  ); // ~5
-
-  console.log(
-    "Тест 3: оценки [12,8], max 10 →",
-    scoringService.scoreEssay([12, 8], { maxPoints: 10 })
-  ); // 10 (не больше max)
-
-  console.log(
-    "Тест 4: пустой массив, max 10 →",
-    scoringService.scoreEssay([], { maxPoints: 10 })
-  ); // 0
-}
