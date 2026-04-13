@@ -3,15 +3,17 @@
 import { PrismaClient } from '@prisma/client'
 import { scoringService } from './scoringService.js'
 
+// Создаём клиент для этого модуля
 const prisma = new PrismaClient()
 
+//Интерфейс входных данных для submitAnswer
 export interface SubmitAnswerInput {
   sessionId: string // ID сессии (какой тест проходит студент)
   questionId: string // ID вопроса
   userAnswer: any // Ответ студента (любой формат: строка, массив, число)
 }
 
-// // Ответ студента (любой формат: строка, массив, число)
+// управление жизненным циклом сессии тестирования , в общем отвечает за сохранение ответов, завершение сессии, получение данных сессии
 export class SessionService {
   //сохранение ответа студента
   // Проверяет можно ли отвечать - считает баллы - сохраняет ответ.
@@ -24,9 +26,10 @@ export class SessionService {
       })
 
       if (!session) {
-        throw new Error('Сессия не найдена') // нет такой сессии - ошибка
+        throw new Error('Сессия не найдена') // нет такой сессии - ошибка 
+        // throw прерывает транзакцию, изменения не применятся
       }
-      // Проверяем статус: можно отвечать только в "in_progress"
+      // Проверяем статус: можно отвечать только в активной сессии
       if (session.status !== 'in_progress') {
         throw new Error('Сессия уже завершена или истекла')
       }
@@ -50,7 +53,7 @@ export class SessionService {
       }
 
       // ШАГ 3 Проверяем, не отвечали ли уже
-      // Один вопрос — один ответ. Без этой проверки студент мог бы спамить ответы
+      // Один студент = один ответ на один вопрос в одной сессии
       // Ищем по составному уникальному ключу [sessionId + questionId]
       const existingAnswer = await tx.answer.findUnique({
         where: {
@@ -66,7 +69,9 @@ export class SessionService {
       }
 
       // ШАГ 4 Вычисляем баллы (для автоматически проверяемых типов)
-      let score: number | null = null // null = ещё не проверено (для essay)
+      // Логика: автопроверка только для multiple-select
+      // Для essay score = null (проверит админ позже)
+      let score: number | null = null
       let isCorrect: boolean | null = null
       // Только multiple-select можно проверить автоматически
       if (question.type === 'multiple-select') {
